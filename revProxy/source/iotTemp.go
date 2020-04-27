@@ -39,7 +39,7 @@ func main() {
 
 	llog.Info("Handle endpoint: /exit")
 	http.HandleFunc("/exit", exitHandler)
-	llog.Info("Handle endpoint: /", name)
+	llog.Info("Handle endpoint: /" + name)
 	http.HandleFunc("/"+name, handler)
 
 	llog.Info(name + " listening for requests")

@@ -14,7 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"./llog"
+	"./source/llog"
+
 	"github.com/gorilla/mux"
 )
 
@@ -139,6 +140,7 @@ func main() {
 	_, fil := filepath.Split(os.Args[0])
 	name := strings.TrimSuffix(fil, filepath.Ext(fil))
 	llog.SetFile(name + ".log")
+
 	go checkAgents()
 
 	router.HandleFunc("/exit", stopAgents)
