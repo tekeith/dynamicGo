@@ -8,26 +8,30 @@ import (
 )
 
 var logFile *os.File
-var theLog = log.New(os.Stdout, time.Now().Format("[2006-01-02T15:04:05.999 MST] "), 0)
+var theLog = log.New(os.Stderr, "", 0)
+
+func prefix() string {
+	return time.Now().Format("[2006-01-02T15:04:05.999 MST] ")
+}
 
 // Info   Log info messages
 func Info(v ...interface{}) {
-	theLog.Println("[Info] ", v)
+	theLog.Println(prefix(), "[Info] ", v)
 }
 
 // Warn   Log warning messages
 func Warn(v ...interface{}) {
-	theLog.Println("[Warn] ", v)
+	theLog.Println(prefix(), "[Warn] ", v)
 }
 
 // Debug   Log debug messages
 func Debug(v ...interface{}) {
-	theLog.Println("[Debug] ", v)
+	theLog.Println(prefix(), "[Debug] ", v)
 }
 
 // Error   Log error messages
 func Error(v ...interface{}) {
-	theLog.Println("[Error] ", v)
+	theLog.Println(prefix(), "[Error] ", v)
 }
 
 // Close   Close log file if not nil
@@ -46,6 +50,6 @@ func SetFile(name string) {
 	if err != nil {
 		log.Fatalf("Error opening file %s: %v", name, err)
 	}
-	w := io.MultiWriter(os.Stdout, logFile)
+	w := io.MultiWriter(os.Stderr, logFile)
 	theLog.SetOutput(w)
 }
