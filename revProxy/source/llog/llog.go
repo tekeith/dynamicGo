@@ -11,7 +11,7 @@ var logFile *os.File
 var theLog = log.New(os.Stderr, "", 0)
 
 func prefix() string {
-	return time.Now().Format("[2006-01-02T15:04:05.999 MST] ")
+	return time.Now().Format("[2006-01-02T15:04:05.0000 MST] ")
 }
 
 // Info   Log info messages
@@ -46,7 +46,7 @@ func Close() {
 // SetFile   Set logging output to a file, name parameter will have .log added
 func SetFile(name string) {
 	var err error
-	logFile, err = os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+	logFile, err = os.OpenFile(name, os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		log.Fatalf("Error opening file %s: %v", name, err)
 	}

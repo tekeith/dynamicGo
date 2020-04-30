@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"net/http"
 	"os"
@@ -28,9 +29,13 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 func monitor() {
 	var input string
-	for {
-		fmt.Scanln(&input)
-		llog.Info("Read from stdin: " + input)
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		input = scanner.Text()
+		llog.Warn("Read from stdin: " + input)
+		if len(input) > 0 {
+			llog.Info("Read from stdin: " + input)
+		}
 		switch input {
 		case "ping":
 			fmt.Println("ok")
@@ -39,6 +44,9 @@ func monitor() {
 			time.Sleep(2 * time.Second)
 			os.Exit(0)
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		llog.Error("While reading standard input: ", err)
 	}
 }
 

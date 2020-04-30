@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -12,23 +13,28 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"./source/llog"
-
 	"github.com/gorilla/mux"
 )
 
 var agentDir = "agents/"
-var myPort uint32 = 8100
+var myPort int64 = 8100
 var port = myPort
 var myHost, _ = os.Hostname()
 var myClient = &http.Client{
 	Timeout: time.Second * 10,
 }
 var router = mux.NewRouter()
+var server = &http.Server{Addr: ":" + strconv.FormatInt(myPort, 10), Handler: router}
+var waitGrp sync.WaitGroup
+var mutex sync.Mutex
+var runningFlag = true
 
 type urlAgent struct {
 	url       string // "http://thishost:8888"
@@ -36,61 +42,101 @@ type urlAgent struct {
 	toAgent   io.WriteCloser
 	fromAgent io.ReadCloser
 	response  string
+	agentFile string
 }
 
 var agents = map[string]*urlAgent{}
 
-func stopAgent(name string, agent *urlAgent) {
-	agent.toAgent.Write([]byte("exit\n"))
+func shutDown() {
+	mutex.Lock()
+	runningFlag = false
+	mutex.Unlock()
+}
+
+func running() bool {
+	var result bool
+	mutex.Lock()
+	result = runningFlag
+	mutex.Unlock()
+	return result
+}
+
+func checkAgent(name string, agent *urlAgent) {
+	waitGrp.Add(1)
+	defer waitGrp.Done()
+
+	agent.response = ""
+	agent.toAgent.Write([]byte("ping\n"))
 	time.Sleep(2 * time.Second)
-	fmt.Println(agent.response)
-	if strings.Compare(agent.response, "exiting") == 0 {
-		llog.Info(name + " stopped.")
-		delete(agents, name)
+	if len(agent.response) > 0 {
+		// if strings.Compare(agent.response, "ok") == 0 {
+		// 	llog.Info(name, " running.")
+		// } else {
+		// 	llog.Error(name, " responded with: ", agent.response)
+		// }
 	} else {
-		llog.Error("Failed to stop " + name)
+		llog.Error(name, " did not respond, will try to start it.")
+		delete(agents, name)
+		startAgent(name)
 	}
 }
 
-func getAgent(agentName string) *urlAgent {
+func stopAgent(name string, agent *urlAgent) {
+	waitGrp.Add(1)
+	defer waitGrp.Done()
+
+	llog.Info("Stop agent: ", name)
+	agent.response = ""
+	agent.toAgent.Write([]byte("exit\n"))
+	time.Sleep(2 * time.Second)
+	if len(agent.response) > 0 {
+		llog.Info("Response from ", name, "is: ", agent.response)
+		if strings.Compare(agent.response, "exiting") == 0 {
+			llog.Info(name, " stopped.")
+			delete(agents, name)
+		} else {
+			llog.Error("Failed to stop ", name)
+		}
+	} else {
+		llog.Error("No response from ", name, " assuming it has exited.")
+		delete(agents, name)
+	}
+}
+
+func listenAgent(agentName string) {
+	waitGrp.Add(1)
+	defer waitGrp.Done()
+
 	agent := agents[agentName]
 	if agent == nil {
-		llog.Info("Call startAgent for ", agentName)
-		return startAgent(agentName)
+		return
 	}
-	return agent
-}
-func listenAgent(agentName string) {
-	for {
-		agent := agents[agentName]
-		if agent == nil {
-			return
+	scanner := bufio.NewScanner(agent.fromAgent)
+	for scanner.Scan() {
+		resp := scanner.Text()
+		// llog.Warn("Read from " + agentName + ": " + resp)
+		if len(resp) > 0 {
+			agent.response = resp
 		}
-		scanner := bufio.NewScanner(agent.fromAgent)
-		if scanner.Scan() {
-			resp := scanner.Text()
-			if len(resp) > 0 {
-				agent.response = resp
-			}
-		} else {
-			err := scanner.Err()
-			if err == nil {
-				delete(agents, agentName)
-			}
-		}
+	}
+	if err := scanner.Err(); err != nil {
+		delete(agents, agentName)
 	}
 }
 
 func startAgent(agentName string) *urlAgent {
+	if !running() {
+		return nil
+	}
 	agentPath := agentDir + agentName
-	agentPort := atomic.AddUint32(&port, 1)
+	agentPort := atomic.AddInt64(&port, 1)
 	cmd := exec.Command(agentPath, fmt.Sprint(agentPort))
 	toAgent, _ := cmd.StdinPipe()
 	fromAgent, _ := cmd.StdoutPipe()
 	err := cmd.Start()
 	if err != nil {
 		llog.Error("Error starting cmd: ", agentPath, ":", fmt.Sprint(agentPort))
-		llog.Error(err)
+		llog.Error("Error: ", err)
 		delete(agents, agentName)
 		return nil
 	}
@@ -115,27 +161,74 @@ func startAgent(agentName string) *urlAgent {
 }
 
 func stopAgents(w http.ResponseWriter, r *http.Request) {
-	for len(agents) > 0 {
-		for name, agent := range agents {
-			stopAgent(name, agent)
-		}
-	}
-	llog.Info("Exiting")
-	fmt.Fprintf(w, "Exiting")
-	os.Exit(0)
+	shutDown()
+	go shutdownAgents()
+	go stopServer()
+	llog.Info("Shutting down agents.")
+	w.Write([]byte("Exiting"))
 }
 
-func XXcheckAgents() {
-	for {
-		files, _ := listAgents()
-		for _, fil := range files {
-			agent := getAgent(fil)
-			if agent == nil {
-				llog.Error("Unable to start ", fil)
-			}
-		}
-		time.Sleep(20 * time.Second)
+func stopServer() {
+	waitGrp.Add(1)
+	defer waitGrp.Done()
+
+	time.Sleep(5 * time.Second)
+	llog.Info("Initiate server shutdown.")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer func() {
+		cancel()
+	}()
+
+	if err := server.Shutdown(ctx); err != nil {
+		llog.Error("Server Shutdown Failed: ", err)
 	}
+	llog.Info("Server Exited Properly")
+}
+
+func shutdownAgents() {
+	waitGrp.Add(1)
+	defer waitGrp.Done()
+
+	for len(agents) > 0 {
+		for name, agent := range agents {
+			go stopAgent(name, agent)
+		}
+		time.Sleep(10 * time.Second)
+	}
+}
+
+func checkAgents() {
+	// need to get list of agent files,
+	// use it with the list of running agents to:
+	// start agents for files that have been added
+	// stop any agents whose agent files have been removed
+
+	agentFiles, _ := listAgents()     // list of agent files
+	for _, name := range agentFiles { // start any agent not in the list
+		agent := agents[name]
+		if agent == nil {
+			startAgent(name)
+		}
+	}
+
+	// now we need to check to make each agent is still in list of files
+	for name, agent := range agents {
+		if !contains(agentFiles, name) {
+			go stopAgent(name, agent)
+		} else {
+			// it is in the list, make sure it is running
+			go checkAgent(name, agent)
+		}
+	}
+}
+
+func contains(alist []string, name string) bool {
+	for _, itm := range alist {
+		if itm == name {
+			return true
+		}
+	}
+	return false
 }
 
 func startAgents() {
@@ -174,23 +267,43 @@ func isExecutable(agentPath string) bool {
 	return true
 }
 
+func refreshAgents() {
+	waitGrp.Add(1)
+	defer waitGrp.Done()
+
+	cnt := 1
+	for running() {
+		if cnt > 6 {
+			cnt = 1
+			checkAgents()
+		} else {
+			cnt = cnt + 1
+		}
+		time.Sleep(10 * time.Second)
+	}
+}
+
 func main() {
 	_, fil := filepath.Split(os.Args[0])
 	name := strings.TrimSuffix(fil, filepath.Ext(fil))
 	llog.SetFile("logs/" + name + ".log")
 
-	//go startAgents()
 	startAgents()
+
+	go refreshAgents()
 
 	router.HandleFunc("/exit", stopAgents)
 
 	addr := "localhost:" + fmt.Sprint(myPort)
 	llog.Info("Listen on addr: ", addr)
-	err := http.ListenAndServe(addr, router)
+
+	err := server.ListenAndServe()
 	if err != nil {
-		llog.Error(err)
+		llog.Error("Error from server: ", err)
 	}
-	llog.Info("Leaving main")
+
+	waitGrp.Wait()
+	llog.Info(name, " exiting.")
 }
 
 func handler(p *httputil.ReverseProxy) func(http.ResponseWriter, *http.Request) {
