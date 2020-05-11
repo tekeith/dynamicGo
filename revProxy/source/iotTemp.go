@@ -10,7 +10,11 @@ import (
 	"time"
 
 	"./llog"
+	"github.com/gorilla/mux"
 )
+
+var router = mux.NewRouter()
+var name string
 
 func exitHandler(w http.ResponseWriter, r *http.Request) {
 	llog.Info("Exiting as requested")
@@ -50,9 +54,14 @@ func monitor() {
 	}
 }
 
+func notFound(w http.ResponseWriter, r *http.Request) {
+	fmt.Println(r.URL.String(), " was not found by ", name)
+	fmt.Fprint(w, r.URL.String(), " was not found by ", name)
+}
+
 func main() {
 	_, fil := filepath.Split(os.Args[0])
-	name := strings.TrimSuffix(fil, filepath.Ext(fil))
+	name = strings.TrimSuffix(fil, filepath.Ext(fil))
 	llog.SetFile("logs/" + name + ".log")
 	if len(os.Args) < 2 {
 		llog.Error("Port number must be provided as commandline argument.")
@@ -61,15 +70,16 @@ func main() {
 
 	go monitor()
 
-	addr := "localhost:" + os.Args[1]
+	server := &http.Server{Addr: ":" + os.Args[1], Handler: router}
 
 	llog.Info("Handle endpoint: /exit")
-	http.HandleFunc("/exit", exitHandler)
+	router.HandleFunc("/exit", exitHandler)
 	llog.Info("Handle endpoint: /" + name)
-	http.HandleFunc("/"+name, handler)
+	router.PathPrefix("/" + name).HandlerFunc(handler)
+	router.NotFoundHandler = http.HandlerFunc(notFound)
 
 	llog.Info(name + " listening for requests")
-	err := http.ListenAndServe(addr, nil)
+	err := server.ListenAndServe()
 	if err != nil {
 		llog.Error(err)
 	}
