@@ -54,7 +54,7 @@ func setupProxy(path string, purl string) {
 func main() {
 
 	cnt := len(os.Args)
-	if cnt < 4 {
+	if cnt < 2 {
 		usage(name, cnt)
 	}
 
@@ -74,6 +74,12 @@ func main() {
 		default:
 			// should be path=url
 			parts := strings.Split(arg, "=")
+			if len(parts) == 1 {
+				fmt.Println("Argument is of wrong form, should be path=url, missing =,")
+				fmt.Println(" examples:  default=http://localhost:4200 /api=http://localhost:53313")
+				fmt.Println("  Actual argument: " + arg)
+				usage(name, cnt)
+			}
 			path := parts[0]
 			url := parts[1]
 			if path == "default" {
@@ -92,11 +98,12 @@ func main() {
 }
 
 func usage(name string, cnt int) {
+	cnt--
 	str := "argument"
 	if cnt > 1 {
 		str = str + "s"
 	}
-	fmt.Println(name + " invoked with " + fmt.Sprint(cnt) + " " + str + ", requires at least 4. Example:")
+	fmt.Println(name + " invoked with " + fmt.Sprint(cnt) + " " + str + ", requires at least 2, normal use requires 3. Example use:")
 	fmt.Println("    " + name + " 8100 default=http://localhost:4200 /api=http://localhost:53313 ")
 	fmt.Println("    " + name + " port_to_listen_on default=url path_1=url ... ")
 	os.Exit(1)
